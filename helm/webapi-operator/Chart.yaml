@@ -1,0 +1,15 @@
+apiVersion: v2
+name: webapi-operator
+description: Kubernetes operator for managing API deployments
+type: application
+version: 0.1.0
+appVersion: "0.2.0"
+keywords:
+  - kubernetes
+  - operator
+  - api
+  - deployment
+maintainers:
+  - name: Aaron Stahley
+sources:
+  - https://github.com/AaronStahley/webapi-operator

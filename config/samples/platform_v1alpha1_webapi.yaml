@@ -1,0 +1,54 @@
+apiVersion: platform.aaronstahley.dev/v1alpha1
+kind: WebApi
+metadata:
+  name: podinfo
+  labels:
+    team: demo
+spec:
+  image:
+    repository: ghcr.io/stefanprodan/podinfo
+    tag: 6.15.0
+    pullPolicy: IfNotPresent
+
+  replicas: 1
+
+  # Must be set when probes are enabled: probes target the named port "http".
+  containerPort: 9898
+
+  healthCheck:
+    liveness:
+      enabled: true
+      path: /healthz
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 1
+      successThreshold: 1
+      failureThreshold: 3
+    readiness:
+      enabled: true
+      path: /readyz
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      timeoutSeconds: 1
+      successThreshold: 1
+      failureThreshold: 3
+
+  resources:
+    requests:
+      memory: 32Mi
+      cpu: 25m
+    limits:
+      memory: 64Mi
+      cpu: 100m
+
+  env:
+    - name: PODINFO_UI_MESSAGE
+      value: hello from a WebApi
+
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: http
+
+  labels:
+    team: demo
