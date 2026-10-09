@@ -118,6 +118,12 @@ func (r *WebApiReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			updateReason = "templateLabels"
 		} else if !equality.Semantic.DeepEqual(deployment.Labels, dep.Labels) {
 			updateReason = "labels"
+		} else if !equality.Semantic.DeepEqual(deployment.Spec.Strategy, dep.Spec.Strategy) {
+			updateReason = "strategy"
+		} else if deployment.Spec.MinReadySeconds != dep.Spec.MinReadySeconds {
+			updateReason = "minReadySeconds"
+		} else if !equality.Semantic.DeepEqual(deployment.Spec.ProgressDeadlineSeconds, dep.Spec.ProgressDeadlineSeconds) {
+			updateReason = "progressDeadlineSeconds"
 		} else if len(deployment.Spec.Template.Spec.Containers) > 0 && len(dep.Spec.Template.Spec.Containers) > 0 {
 			actual := deployment.Spec.Template.Spec.Containers[0]
 			desired := dep.Spec.Template.Spec.Containers[0]
@@ -310,6 +316,8 @@ func (r *WebApiReconciler) buildDeployment(webApi *apiv1alpha1.WebApi) *appsv1.D
 		}
 	}
 
+	rollout := effectiveRollout(webApi)
+
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      webApi.Name,
@@ -318,6 +326,15 @@ func (r *WebApiReconciler) buildDeployment(webApi *apiv1alpha1.WebApi) *appsv1.D
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
+			Strategy: appsv1.DeploymentStrategy{
+				Type: appsv1.RollingUpdateDeploymentStrategyType,
+				RollingUpdate: &appsv1.RollingUpdateDeployment{
+					MaxSurge:       &rollout.maxSurge,
+					MaxUnavailable: &rollout.maxUnavailable,
+				},
+			},
+			MinReadySeconds:         rollout.minReadySeconds,
+			ProgressDeadlineSeconds: &rollout.progressDeadlineSeconds,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
 					"app": webApi.Name,
@@ -408,23 +425,11 @@ func (r *WebApiReconciler) updateStatus(ctx context.Context, webApi *apiv1alpha1
 	webApi.Status.Replicas = deployment.Status.Replicas
 	webApi.Status.ReadyReplicas = deployment.Status.ReadyReplicas
 
-	// Update conditions
-	readyCondition := metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionFalse,
-		Reason:             "DeploymentNotReady",
-		Message:            "Deployment is not ready",
-		LastTransitionTime: metav1.Now(),
-		ObservedGeneration: webApi.Generation,
+	// Update conditions (Ready, Progressing, Degraded) from the Deployment's rollout state.
+	// SetStatusCondition only bumps LastTransitionTime when a condition's status changes.
+	for _, c := range buildConditions(webApi, deployment) {
+		meta.SetStatusCondition(&webApi.Status.Conditions, c)
 	}
-
-	if deployment.Status.ReadyReplicas == deployment.Status.Replicas && deployment.Status.Replicas > 0 {
-		readyCondition.Status = metav1.ConditionTrue
-		readyCondition.Reason = "DeploymentReady"
-		readyCondition.Message = "All resources created successfully"
-	}
-
-	meta.SetStatusCondition(&webApi.Status.Conditions, readyCondition)
 
 	// Update the status
 	if err := r.Status().Update(ctx, webApi); err != nil {

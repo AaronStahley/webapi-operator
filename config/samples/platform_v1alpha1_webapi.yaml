@@ -33,6 +33,14 @@ spec:
       successThreshold: 1
       failureThreshold: 3
 
+  # Optional. With a readiness probe the operator defaults to a zero-downtime
+  # rolling update (maxSurge 1, maxUnavailable 0); override as needed.
+  rollout:
+    maxSurge: 1
+    maxUnavailable: 0
+    minReadySeconds: 5
+    progressDeadlineSeconds: 300
+
   resources:
     requests:
       memory: 32Mi

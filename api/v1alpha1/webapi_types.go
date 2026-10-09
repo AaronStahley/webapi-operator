@@ -20,6 +20,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
@@ -31,8 +32,11 @@ type ImageSpec struct {
 	// +kubebuilder:validation:Required
 	Repository string `json:"repository"`
 
-	// Tag is the container image tag
+	// Tag is the container image tag. The "latest" tag is rejected so that every
+	// deployment is reproducible.
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:XValidation:rule="self != 'latest'",message="the 'latest' tag is not allowed; pin a version"
 	Tag string `json:"tag"`
 
 	// PullPolicy describes a policy for if/when to pull a container image
@@ -128,7 +132,40 @@ type ServiceSpec struct {
 	TargetPort string `json:"targetPort,omitempty"`
 }
 
+// RolloutSpec configures how updates are rolled out to the managed Deployment.
+//
+// When a readiness probe is enabled the operator defaults to a zero-downtime
+// rolling update (maxSurge 1, maxUnavailable 0). Without a readiness probe it
+// falls back to the Kubernetes default of 25% for both.
+type RolloutSpec struct {
+	// MaxSurge is the maximum number of pods that can be created above the desired
+	// replica count during an update: an absolute number or a percentage such as "25%".
+	// +optional
+	MaxSurge *intstr.IntOrString `json:"maxSurge,omitempty"`
+
+	// MaxUnavailable is the maximum number of pods that can be unavailable during an
+	// update: an absolute number or a percentage such as "25%".
+	// +optional
+	MaxUnavailable *intstr.IntOrString `json:"maxUnavailable,omitempty"`
+
+	// MinReadySeconds is the minimum number of seconds a new pod must be ready,
+	// without any container crashing, before it is considered available.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	MinReadySeconds int32 `json:"minReadySeconds,omitempty"`
+
+	// ProgressDeadlineSeconds is how long a rollout may make no progress before the
+	// WebApi is reported as Degraded. Defaults to 600.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	ProgressDeadlineSeconds *int32 `json:"progressDeadlineSeconds,omitempty"`
+}
+
 // WebApiSpec defines the desired state of WebApi
+//
+// The XValidation rule below rejects specs that enable a probe without a
+// containerPort, because probes target the named container port "http".
+// +kubebuilder:validation:XValidation:rule="has(self.containerPort) || !has(self.healthCheck) || !((has(self.healthCheck.liveness) && has(self.healthCheck.liveness.enabled) && self.healthCheck.liveness.enabled) || (has(self.healthCheck.readiness) && has(self.healthCheck.readiness.enabled) && self.healthCheck.readiness.enabled))",message="containerPort is required when a probe is enabled"
 type WebApiSpec struct {
 	// Image specifies the container image configuration
 	// +kubebuilder:validation:Required
@@ -165,6 +202,10 @@ type WebApiSpec struct {
 	// +optional
 	Service *ServiceSpec `json:"service,omitempty"`
 
+	// Rollout configures how updates are rolled out
+	// +optional
+	Rollout *RolloutSpec `json:"rollout,omitempty"`
+
 	// Labels are additional labels to apply to all resources
 	// +optional
 	Labels map[string]string `json:"labels,omitempty"`
@@ -175,10 +216,10 @@ type WebApiStatus struct {
 	// Conditions represent the current state of the WebApi resource.
 	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
 	//
-	// Standard condition types include:
-	// - "Ready": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
+	// Condition types:
+	// - "Ready": all desired replicas are updated, available and ready
+	// - "Progressing": true only while a rollout is in flight
+	// - "Degraded": the rollout failed (progress deadline exceeded) or pods cannot be created
 	//
 	// The status of each condition is one of True, False, or Unknown.
 	// +listType=map
@@ -213,6 +254,7 @@ type WebApiStatus struct {
 // +kubebuilder:printcolumn:name="Tag",type=string,JSONPath=`.spec.image.tag`
 // +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=`.status.replicas`
 // +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyReplicas`
+// +kubebuilder:printcolumn:name="Status",type=string,JSONPath=`.status.conditions[?(@.type=='Ready')].reason`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // WebApi is the Schema for the webapis API
