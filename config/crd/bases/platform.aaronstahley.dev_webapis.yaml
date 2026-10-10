@@ -27,6 +27,9 @@ spec:
     - jsonPath: .status.readyReplicas
       name: Ready
       type: integer
+    - jsonPath: .status.conditions[?(@.type=='Ready')].reason
+      name: Status
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -365,8 +368,14 @@ spec:
                     description: Repository is the container image repository
                     type: string
                   tag:
-                    description: Tag is the container image tag
+                    description: |-
+                      Tag is the container image tag. The "latest" tag is rejected so that every
+                      deployment is reproducible.
+                    minLength: 1
                     type: string
+                    x-kubernetes-validations:
+                    - message: the 'latest' tag is not allowed; pin a version
+                      rule: self != 'latest'
                 required:
                 - repository
                 - tag
@@ -423,6 +432,40 @@ spec:
                         x-kubernetes-int-or-string: true
                     type: object
                 type: object
+              rollout:
+                description: Rollout configures how updates are rolled out
+                properties:
+                  maxSurge:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: |-
+                      MaxSurge is the maximum number of pods that can be created above the desired
+                      replica count during an update: an absolute number or a percentage such as "25%".
+                    x-kubernetes-int-or-string: true
+                  maxUnavailable:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: |-
+                      MaxUnavailable is the maximum number of pods that can be unavailable during an
+                      update: an absolute number or a percentage such as "25%".
+                    x-kubernetes-int-or-string: true
+                  minReadySeconds:
+                    description: |-
+                      MinReadySeconds is the minimum number of seconds a new pod must be ready,
+                      without any container crashing, before it is considered available.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  progressDeadlineSeconds:
+                    description: |-
+                      ProgressDeadlineSeconds is how long a rollout may make no progress before the
+                      WebApi is reported as Degraded. Defaults to 600.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                type: object
               service:
                 description: Service defines the Service configuration
                 properties:
@@ -448,6 +491,12 @@ spec:
             required:
             - image
             type: object
+            x-kubernetes-validations:
+            - message: containerPort is required when a probe is enabled
+              rule: has(self.containerPort) || !has(self.healthCheck) || !((has(self.healthCheck.liveness)
+                && has(self.healthCheck.liveness.enabled) && self.healthCheck.liveness.enabled)
+                || (has(self.healthCheck.readiness) && has(self.healthCheck.readiness.enabled)
+                && self.healthCheck.readiness.enabled))
           status:
             description: status defines the observed state of WebApi
             properties:
@@ -456,10 +505,10 @@ spec:
                   Conditions represent the current state of the WebApi resource.
                   Each condition has a unique type and reflects the status of a specific aspect of the resource.
 
-                  Standard condition types include:
-                  - "Ready": the resource is fully functional
-                  - "Progressing": the resource is being created or updated
-                  - "Degraded": the resource failed to reach or maintain its desired state
+                  Condition types:
+                  - "Ready": all desired replicas are updated, available and ready
+                  - "Progressing": true only while a rollout is in flight
+                  - "Degraded": the rollout failed (progress deadline exceeded) or pods cannot be created
 
                   The status of each condition is one of True, False, or Unknown.
                 items:

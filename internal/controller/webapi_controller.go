@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -84,7 +85,7 @@ func (r *WebApiReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	// Check if the resource is being deleted
-	if !webApi.ObjectMeta.DeletionTimestamp.IsZero() {
+	if !webApi.DeletionTimestamp.IsZero() {
 		// Resource is being deleted, cleanup handled by owner references
 		return ctrl.Result{}, nil
 	}
@@ -108,37 +109,8 @@ func (r *WebApiReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	} else {
 		// Update existing Deployment only if the fields we manage have changed.
-		// Comparing the full Spec would always differ due to Kubernetes-added defaults
-		// (terminationMessagePath, dnsPolicy, etc.) that buildDeployment does not set.
 		dep := r.buildDeployment(webApi)
-		var updateReason string
-		if !equality.Semantic.DeepEqual(deployment.Spec.Replicas, dep.Spec.Replicas) {
-			updateReason = "replicas"
-		} else if !equality.Semantic.DeepEqual(deployment.Spec.Template.Labels, dep.Spec.Template.Labels) {
-			updateReason = "templateLabels"
-		} else if !equality.Semantic.DeepEqual(deployment.Labels, dep.Labels) {
-			updateReason = "labels"
-		} else if len(deployment.Spec.Template.Spec.Containers) > 0 && len(dep.Spec.Template.Spec.Containers) > 0 {
-			actual := deployment.Spec.Template.Spec.Containers[0]
-			desired := dep.Spec.Template.Spec.Containers[0]
-			if actual.Image != desired.Image {
-				updateReason = "image"
-			} else if actual.ImagePullPolicy != desired.ImagePullPolicy {
-				updateReason = "imagePullPolicy"
-			} else if !equality.Semantic.DeepEqual(actual.Env, desired.Env) {
-				updateReason = "env"
-			} else if !equality.Semantic.DeepEqual(actual.EnvFrom, desired.EnvFrom) {
-				updateReason = "envFrom"
-			} else if !equality.Semantic.DeepEqual(actual.Ports, desired.Ports) {
-				updateReason = "ports"
-			} else if !equality.Semantic.DeepEqual(actual.Resources, desired.Resources) {
-				updateReason = "resources"
-			} else if !equality.Semantic.DeepEqual(actual.LivenessProbe, desired.LivenessProbe) {
-				updateReason = "livenessProbe"
-			} else if !equality.Semantic.DeepEqual(actual.ReadinessProbe, desired.ReadinessProbe) {
-				updateReason = "readinessProbe"
-			}
-		}
+		updateReason := deploymentDrift(deployment, dep)
 		needsUpdate := updateReason != ""
 		if needsUpdate {
 			deployment.Spec = dep.Spec
@@ -205,6 +177,57 @@ func (r *WebApiReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	return ctrl.Result{}, nil
 }
 
+// deploymentDrift returns the first managed field that differs between the actual and
+// desired Deployment, or "" if none do. Comparing the full Spec would always differ due
+// to Kubernetes-added defaults (terminationMessagePath, dnsPolicy, etc.).
+func deploymentDrift(deployment, dep *appsv1.Deployment) string {
+	if !equality.Semantic.DeepEqual(deployment.Spec.Replicas, dep.Spec.Replicas) {
+		return "replicas"
+	} else if !equality.Semantic.DeepEqual(deployment.Spec.Template.Labels, dep.Spec.Template.Labels) {
+		return "templateLabels"
+	} else if !equality.Semantic.DeepEqual(deployment.Labels, dep.Labels) {
+		return "labels"
+	} else if !equality.Semantic.DeepEqual(deployment.Spec.Strategy, dep.Spec.Strategy) {
+		return "strategy"
+	} else if deployment.Spec.MinReadySeconds != dep.Spec.MinReadySeconds {
+		return "minReadySeconds"
+	} else if !equality.Semantic.DeepEqual(deployment.Spec.ProgressDeadlineSeconds, dep.Spec.ProgressDeadlineSeconds) {
+		return "progressDeadlineSeconds"
+	} else if len(deployment.Spec.Template.Spec.Containers) > 0 && len(dep.Spec.Template.Spec.Containers) > 0 {
+		actual := deployment.Spec.Template.Spec.Containers[0]
+		desired := dep.Spec.Template.Spec.Containers[0]
+		if actual.Image != desired.Image {
+			return "image"
+		} else if actual.ImagePullPolicy != desired.ImagePullPolicy {
+			return "imagePullPolicy"
+		} else if !equality.Semantic.DeepEqual(actual.Env, desired.Env) {
+			return "env"
+		} else if !equality.Semantic.DeepEqual(actual.EnvFrom, desired.EnvFrom) {
+			return "envFrom"
+		} else if !equality.Semantic.DeepEqual(actual.Ports, desired.Ports) {
+			return "ports"
+		} else if !equality.Semantic.DeepEqual(actual.Resources, desired.Resources) {
+			return "resources"
+		} else if !equality.Semantic.DeepEqual(actual.LivenessProbe, desired.LivenessProbe) {
+			return "livenessProbe"
+		} else if !equality.Semantic.DeepEqual(actual.ReadinessProbe, desired.ReadinessProbe) {
+			return "readinessProbe"
+		}
+	}
+	return ""
+}
+
+// commonLabels returns the labels applied to every object owned by a WebApi.
+func commonLabels(webApi *apiv1alpha1.WebApi) map[string]string {
+	l := map[string]string{
+		"app":                          webApi.Name,
+		"app.kubernetes.io/name":       webApi.Name,
+		"app.kubernetes.io/managed-by": "webapi-operator",
+	}
+	maps.Copy(l, webApi.Spec.Labels)
+	return l
+}
+
 // buildDeployment creates a Deployment from the WebApi spec
 func (r *WebApiReconciler) buildDeployment(webApi *apiv1alpha1.WebApi) *appsv1.Deployment {
 	replicas := int32(1)
@@ -212,18 +235,7 @@ func (r *WebApiReconciler) buildDeployment(webApi *apiv1alpha1.WebApi) *appsv1.D
 		replicas = *webApi.Spec.Replicas
 	}
 
-	labels := map[string]string{
-		"app":                          webApi.Name,
-		"app.kubernetes.io/name":       webApi.Name,
-		"app.kubernetes.io/managed-by": "webapi-operator",
-	}
-
-	// Merge custom labels
-	if webApi.Spec.Labels != nil {
-		for k, v := range webApi.Spec.Labels {
-			labels[k] = v
-		}
-	}
+	objLabels := commonLabels(webApi)
 
 	// Build container spec
 	container := corev1.Container{
@@ -310,14 +322,25 @@ func (r *WebApiReconciler) buildDeployment(webApi *apiv1alpha1.WebApi) *appsv1.D
 		}
 	}
 
+	rollout := effectiveRollout(webApi)
+
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      webApi.Name,
 			Namespace: webApi.Namespace,
-			Labels:    labels,
+			Labels:    objLabels,
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
+			Strategy: appsv1.DeploymentStrategy{
+				Type: appsv1.RollingUpdateDeploymentStrategyType,
+				RollingUpdate: &appsv1.RollingUpdateDeployment{
+					MaxSurge:       &rollout.maxSurge,
+					MaxUnavailable: &rollout.maxUnavailable,
+				},
+			},
+			MinReadySeconds:         rollout.minReadySeconds,
+			ProgressDeadlineSeconds: &rollout.progressDeadlineSeconds,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
 					"app": webApi.Name,
@@ -325,7 +348,7 @@ func (r *WebApiReconciler) buildDeployment(webApi *apiv1alpha1.WebApi) *appsv1.D
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: labels,
+					Labels: objLabels,
 				},
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{container},
@@ -342,18 +365,7 @@ func (r *WebApiReconciler) buildDeployment(webApi *apiv1alpha1.WebApi) *appsv1.D
 
 // buildService creates a Service from the WebApi spec
 func (r *WebApiReconciler) buildService(webApi *apiv1alpha1.WebApi) *corev1.Service {
-	labels := map[string]string{
-		"app":                          webApi.Name,
-		"app.kubernetes.io/name":       webApi.Name,
-		"app.kubernetes.io/managed-by": "webapi-operator",
-	}
-
-	// Merge custom labels
-	if webApi.Spec.Labels != nil {
-		for k, v := range webApi.Spec.Labels {
-			labels[k] = v
-		}
-	}
+	objLabels := commonLabels(webApi)
 
 	serviceType := corev1.ServiceTypeClusterIP
 	port := int32(80)
@@ -375,7 +387,7 @@ func (r *WebApiReconciler) buildService(webApi *apiv1alpha1.WebApi) *corev1.Serv
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      webApi.Name,
 			Namespace: webApi.Namespace,
-			Labels:    labels,
+			Labels:    objLabels,
 		},
 		Spec: corev1.ServiceSpec{
 			Type: serviceType,
@@ -408,23 +420,11 @@ func (r *WebApiReconciler) updateStatus(ctx context.Context, webApi *apiv1alpha1
 	webApi.Status.Replicas = deployment.Status.Replicas
 	webApi.Status.ReadyReplicas = deployment.Status.ReadyReplicas
 
-	// Update conditions
-	readyCondition := metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionFalse,
-		Reason:             "DeploymentNotReady",
-		Message:            "Deployment is not ready",
-		LastTransitionTime: metav1.Now(),
-		ObservedGeneration: webApi.Generation,
+	// Update conditions (Ready, Progressing, Degraded) from the Deployment's rollout state.
+	// SetStatusCondition only bumps LastTransitionTime when a condition's status changes.
+	for _, c := range buildConditions(webApi, deployment) {
+		meta.SetStatusCondition(&webApi.Status.Conditions, c)
 	}
-
-	if deployment.Status.ReadyReplicas == deployment.Status.Replicas && deployment.Status.Replicas > 0 {
-		readyCondition.Status = metav1.ConditionTrue
-		readyCondition.Reason = "DeploymentReady"
-		readyCondition.Message = "All resources created successfully"
-	}
-
-	meta.SetStatusCondition(&webApi.Status.Conditions, readyCondition)
 
 	// Update the status
 	if err := r.Status().Update(ctx, webApi); err != nil {

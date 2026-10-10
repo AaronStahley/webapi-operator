@@ -24,9 +24,21 @@ Early-stage and under active development. Work in progress, not production-ready
 |---|---|
 | `WebApi` CRD (image, replicas, port, probes, resources, env, service, labels) | Done |
 | Deployment + Service reconciliation with owner references | Done |
-| `Ready` status condition, replica counts | Done |
+| `Ready` / `Progressing` / `Degraded` conditions, replica counts | Done |
+| Rolling updates (`spec.rollout`), zero-downtime default with a readiness probe | Done |
+| Validation: `latest` tag rejected, `containerPort` required when probes are on (CEL) | Done |
 | Namespace selector (operate only on labeled namespaces) | Done |
 | Helm chart, CI (lint, unit, e2e, build, release) | Done |
+
+## Rollouts and status
+
+`spec.rollout` maps onto the Deployment's rolling-update settings (`maxSurge`, `maxUnavailable`, `minReadySeconds`, `progressDeadlineSeconds`). With a readiness probe enabled the default is `maxSurge: 1, maxUnavailable: 0`, so a pod is only replaced once its successor is ready.
+
+`kubectl get webapi` shows a `Status` column. Conditions:
+
+- `Ready`: all desired replicas are updated, available and ready.
+- `Progressing`: true only while a rollout is in flight.
+- `Degraded`: the rollout missed its progress deadline, or pods cannot be created.
 
 ## Development
 
