@@ -9,7 +9,6 @@ Kubernetes operator (Go, kubebuilder) for the `WebApi` CRD. A developer declares
 - `config/`: kustomize output from controller-gen (CRD, RBAC) plus samples.
 - `helm/webapi-operator/`: the chart Argo CD deploys. `crds/` holds a **copy** of the generated CRD.
 - `.github/workflows/`: lint, test, e2e, build; `release.yml` pushes `ghcr.io/aaronstahley/webapi-operator` on `v*` tags.
-- `AGENTS.md`: kubebuilder's generic guidance, still valid.
 
 ## Build, test, run
 
