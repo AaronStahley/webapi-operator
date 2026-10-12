@@ -1,5 +1,7 @@
 # webapi-operator
 
+> Part of an [internal developer platform proof of concept](https://github.com/AaronStahley/platform-gitops#readme). Start there for the overview, architecture and how to run it.
+
 A Kubernetes operator (Go, kubebuilder) that gives developers a small, stable API for running a containerized web API. A developer declares a `WebApi`; the operator creates and maintains the Deployment and Service behind it and reports status on the resource.
 
 ```yaml
